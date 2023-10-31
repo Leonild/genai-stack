@@ -16,6 +16,7 @@ COPY loader.py .
 COPY utils.py .
 COPY chains.py .
 COPY images ./images
+COPY mgm_data.json .
 
 EXPOSE 8502
 

@@ -7,6 +7,14 @@ from streamlit.logger import get_logger
 from chains import load_embedding_model
 from utils import create_constraints, create_vector_index
 from PIL import Image
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+import json
+from webdriver_manager.chrome import ChromeDriverManager
 
 load_dotenv(".env")
 
@@ -34,27 +42,33 @@ create_vector_index(neo4j_graph, dimension)
 
 
 def load_so_data(tag: str = "neo4j", page: int = 1) -> None:
-    parameters = (
-        f"?pagesize=100&page={page}&order=desc&sort=creation&answers=1&tagged={tag}"
-        "&site=stackoverflow&filter=!*236eb_eL9rai)MOSNZ-6D3Q6ZKb0buI*IVotWaTb"
-    )
-    data = requests.get(so_api_base_url + parameters).json()
+    #parameters = (
+    #    f"?pagesize=100&page={page}&order=desc&sort=creation&answers=1&tagged={tag}"
+    #    "&site=stackoverflow&filter=!*236eb_eL9rai)MOSNZ-6D3Q6ZKb0buI*IVotWaTb"
+    #)
+    #data = requests.get(so_api_base_url + parameters).json()
+    url = "https://aria.mgmresorts.com/en/faq.html"
+    html_content = read_json_file("mgm_data.json")#get_webpage_with_selenium(url)
+    data = html_content#json.dumps(convert_to_json(html_content), indent=2)
     insert_so_data(data)
 
 
 def load_high_score_so_data() -> None:
-    parameters = (
-        f"?fromdate=1664150400&order=desc&sort=votes&site=stackoverflow&"
-        "filter=!.DK56VBPooplF.)bWW5iOX32Fh1lcCkw1b_Y6Zkb7YD8.ZMhrR5.FRRsR6Z1uK8*Z5wPaONvyII"
-    )
-    data = requests.get(so_api_base_url + parameters).json()
+    #parameters = (
+    #    f"?fromdate=1664150400&order=desc&sort=votes&site=stackoverflow&"
+    #    "filter=!.DK56VBPooplF.)bWW5iOX32Fh1lcCkw1b_Y6Zkb7YD8.ZMhrR5.FRRsR6Z1uK8*Z5wPaONvyII"
+    #)
+    #data = requests.get(so_api_base_url + parameters).json()
+    url = "https://aria.mgmresorts.com/en/faq.html"
+    html_content = read_json_file("mgm_data.json")#get_webpage_with_selenium(url)
+    data = html_content#json.dumps(convert_to_json(html_content), indent=2)
     insert_so_data(data)
 
 
 def insert_so_data(data: dict) -> None:
     # Calculate embedding values for questions and answers
     for q in data["items"]:
-        question_text = q["title"] + "\n" + q["body_markdown"]
+        question_text = q["title"]
         q["embedding"] = embeddings.embed_query(question_text)
         for a in q["answers"]:
             a["embedding"] = embeddings.embed_query(
@@ -64,12 +78,39 @@ def insert_so_data(data: dict) -> None:
     # Cypher, the query language of Neo4j, is used to import the data
     # https://neo4j.com/docs/getting-started/cypher-intro/
     # https://neo4j.com/docs/cypher-cheat-sheet/5/auradb-enterprise/
+    #import_query = """
+    #UNWIND $data AS q
+    #MERGE (question:Question {id:q.question_id}) 
+    #ON CREATE SET question.title = q.title, question.link = q.link, question.score = q.score,
+    #    question.favorite_count = q.favorite_count, question.creation_date = datetime({epochSeconds: q.creation_date}),
+    #    question.body = q.body_markdown, question.embedding = q.embedding
+    #FOREACH (tagName IN q.tags | 
+    #    MERGE (tag:Tag {name:tagName}) 
+    #    MERGE (question)-[:TAGGED]->(tag)
+    #)
+    #FOREACH (a IN q.answers |
+    #    MERGE (question)<-[:ANSWERS]-(answer:Answer {id:a.answer_id})
+    #    SET answer.is_accepted = a.is_accepted,
+    #        answer.score = a.score,
+    #        answer.creation_date = datetime({epochSeconds:a.creation_date}),
+    #        answer.body = a.body_markdown,
+    #        answer.embedding = a.embedding
+    #    MERGE (answerer:User {id:coalesce(a.owner.user_id, "deleted")}) 
+    #    ON CREATE SET answerer.display_name = a.owner.display_name,
+    #                  answerer.reputation= a.owner.reputation
+    #    MERGE (answer)<-[:PROVIDED]-(answerer)
+    #)
+    #WITH * WHERE NOT q.owner.user_id IS NULL
+    #MERGE (owner:User {id:q.owner.user_id})
+    #ON CREATE SET owner.display_name = q.owner.display_name,
+    #              owner.reputation = q.owner.reputation
+    #MERGE (owner)-[:ASKED]->(question)
+    #"""
     import_query = """
     UNWIND $data AS q
     MERGE (question:Question {id:q.question_id}) 
-    ON CREATE SET question.title = q.title, question.link = q.link, question.score = q.score,
-        question.favorite_count = q.favorite_count, question.creation_date = datetime({epochSeconds: q.creation_date}),
-        question.body = q.body_markdown, question.embedding = q.embedding
+    ON CREATE SET question.title = q.title,
+                    question.tags = q.tags
     FOREACH (tagName IN q.tags | 
         MERGE (tag:Tag {name:tagName}) 
         MERGE (question)-[:TAGGED]->(tag)
@@ -77,21 +118,11 @@ def insert_so_data(data: dict) -> None:
     FOREACH (a IN q.answers |
         MERGE (question)<-[:ANSWERS]-(answer:Answer {id:a.answer_id})
         SET answer.is_accepted = a.is_accepted,
-            answer.score = a.score,
-            answer.creation_date = datetime({epochSeconds:a.creation_date}),
-            answer.body = a.body_markdown,
+            answer.body_markdown = a.body_markdown,
             answer.embedding = a.embedding
-        MERGE (answerer:User {id:coalesce(a.owner.user_id, "deleted")}) 
-        ON CREATE SET answerer.display_name = a.owner.display_name,
-                      answerer.reputation= a.owner.reputation
-        MERGE (answer)<-[:PROVIDED]-(answerer)
     )
-    WITH * WHERE NOT q.owner.user_id IS NULL
-    MERGE (owner:User {id:q.owner.user_id})
-    ON CREATE SET owner.display_name = q.owner.display_name,
-                  owner.reputation = q.owner.reputation
-    MERGE (owner)-[:ASKED]->(question)
     """
+
     neo4j_graph.query(import_query, {"data": data["items"]})
 
 
@@ -117,8 +148,8 @@ def get_pages():
 
 def render_page():
     datamodel_image = Image.open("./images/datamodel.png")
-    st.header("StackOverflow Loader")
-    st.subheader("Choose StackOverflow tags to load into Neo4j")
+    st.header("MGM Resorts Loader")
+    st.subheader("Choose MGM Resorts site to load into Neo4j")
     st.caption("Go to http://localhost:7474/ to explore the graph.")
 
     user_input = get_tag()
@@ -135,8 +166,8 @@ def render_page():
                 st.caption("Go to http://localhost:7474/ to interact with the database")
             except Exception as e:
                 st.error(f"Error: {e}", icon="🚨")
-    with st.expander("Highly ranked questions rather than tags?"):
-        if st.button("Import highly ranked questions"):
+    with st.expander("Highly ranked questions rather than tags? (Not working now)"):
+        if st.button("Import highly ranked questions (It does the same job as the previous one)"):
             with st.spinner("Loading... This might take a minute or two."):
                 try:
                     load_high_score_so_data()
@@ -145,4 +176,59 @@ def render_page():
                     st.error(f"Error: {e}", icon="🚨")
 
 
+def get_webpage_with_selenium(url):
+    # Setup Selenium to use Chrome
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service)
+    driver.get(url)
+
+    # Waiting for the page to load dynamically generated content
+    try:
+        element_present = EC.presence_of_element_located((By.ID, 'SomeId'))
+        WebDriverWait(driver, 10).until(element_present)
+    except:
+        pass  # Just proceed if the specific element isn't found within 10 seconds
+
+    html_content = driver.page_source
+    driver.quit()
+    with open('output.html', 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    return html_content
+
+def convert_to_json(html_content):
+    soup = BeautifulSoup(html_content, 'lxml')
+    questions = soup.select('a.faq-question')
+    answers = soup.select('div.faq-answer')
+
+    if not questions or not answers:
+        return {}
+
+    faq_list = []
+    count_ID = 0
+    for q, a in zip(questions, answers):
+        question_id = "Aria" + str(count_ID)
+        question_data = {
+            'question_id': question_id,
+            'title': q.get_text(strip=True),
+            'body': q.get_text(strip=True),
+            'tags': ["Aria Hotel", "Aria Resort", "Aria MGM Resorts"],  # If there are tags related to the questions, fill them in here
+            'answers': [{
+                'answer_id': hash(a.get_text(strip=True)),  # Using hash of answer text as a unique ID
+                'is_accepted': True,  # Adjust as necessary
+                'body_markdown': a.get_text(strip=True),
+                'embedding': None  # Adjust as necessary
+            }]
+        }
+        faq_list.append(question_data)
+        count_ID = count_ID + 1
+
+    return faq_list
+
+def read_json_file(filename):
+    """Read a JSON file and return the data."""
+    with open(filename, 'r') as file:
+        data = json.load(file)
+    return data
+
 render_page()
+

@@ -13,3 +13,7 @@ pydantic
 uvicorn
 sse-starlette
 boto3
+webdriver_manager
+selenium
+beautifulsoup4
+lxml

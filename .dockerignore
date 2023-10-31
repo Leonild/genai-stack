@@ -1,4 +1,5 @@
 *
+!*.json
 !*.py
 !requirements.txt
 !images/*
